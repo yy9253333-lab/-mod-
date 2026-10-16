@@ -1,22 +1,21 @@
-name: Qiyuan R5 Auto Build
+name: Qiyuan Mod Build
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '**.zip'
+    branches:
+      - main
+      - master
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Minecraft Forge Mod
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -29,84 +28,15 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.8'
 
-      - name: Find source ZIP
-        id: source
-        shell: bash
-        run: |
-          mapfile -t ZIPS < <(
-            find . -type f -iname '*.zip' \
-              -not -path './.git/*' \
-              -not -path './source/*' \
-              -not -path './output/*'
-          )
+      - name: Build Minecraft Forge Mod
+        run: gradle --no-daemon build
 
-          if [ "${#ZIPS[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one source ZIP. Found ${#ZIPS[@]}."
-            printf '%s\n' "${ZIPS[@]}"
-            exit 1
-          fi
-
-          echo "zip=${ZIPS[0]}" >> "$GITHUB_OUTPUT"
-          echo "Source ZIP: ${ZIPS[0]}"
-
-      - name: Extract source code
-        run: |
-          mkdir -p source
-          unzip -q "${{ steps.source.outputs.zip }}" -d source
-
-      - name: Locate Gradle project
-        id: project
-        shell: bash
-        run: |
-          BUILD_FILE=$(find source -type f \
-            \( -name build.gradle -o -name build.gradle.kts \) \
-            -print -quit)
-
-          if [ -z "$BUILD_FILE" ]; then
-            echo "::error::No Gradle build file found in source ZIP."
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$BUILD_FILE")
-          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Project directory: $PROJECT_DIR"
-
-      - name: Build mod
-        working-directory: ${{ steps.project.outputs.dir }}
-        shell: bash
-        run: |
-          if [ -f ./gradlew ]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon build
-          else
-            gradle --no-daemon build
-          fi
-
-      - name: Collect JAR files
-        shell: bash
-        run: |
-          mkdir -p output
-
-          find source -type f \
-            -path '*/build/libs/*.jar' \
-            ! -name '*-sources.jar' \
-            ! -name '*-javadoc.jar' \
-            -exec cp {} output/ \;
-
-          if ! find output -maxdepth 1 -type f -name '*.jar' | grep -q .; then
-            echo "::error::Build completed without producing a JAR."
-            exit 1
-          fi
-
-          echo "Generated JAR files:"
-          ls -lh output/
-
-      - name: Upload compiled JAR
+      - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: qiyuan-r5-jar
-          path: output/*.jar
+          name: Qiyuan-Forge-1.20.1
+          path: build/libs/*.jar
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
