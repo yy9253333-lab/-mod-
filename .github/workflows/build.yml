@@ -1,166 +1,112 @@
-name: Auto Build JAR
+name: Qiyuan R5 Auto Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'uploads/**'
-      - '.github/workflows/build.yml'
+      - '**.zip'
 
 permissions:
   contents: read
-  actions: read
-
-concurrency:
-  group: auto-build-jar
-  cancel-in-progress: true
 
 jobs:
   build:
+    name: Build Minecraft Forge Mod
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
-      - name: Prepare workspace
-        id: prepare
+      - name: Find source ZIP
+        id: source
         shell: bash
         run: |
-          mkdir -p output source
+          mapfile -t ZIPS < <(
+            find . -type f -iname '*.zip' \
+              -not -path './.git/*' \
+              -not -path './source/*' \
+              -not -path './output/*'
+          )
 
-          FILE=$(find uploads -type f 2>/dev/null | sort | tail -n 1)
-
-          if [ -z "$FILE" ]; then
-            echo "recognized=false" >> "$GITHUB_OUTPUT"
-            echo "version=无法识别" >> "$GITHUB_OUTPUT"
-            echo "没有找到 uploads/ 中的文件。"
-            exit 0
+          if [ "${#ZIPS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one source ZIP. Found ${#ZIPS[@]}."
+            printf '%s\n' "${ZIPS[@]}"
+            exit 1
           fi
 
-          echo "上传文件：$FILE"
+          echo "zip=${ZIPS[0]}" >> "$GITHUB_OUTPUT"
+          echo "Source ZIP: ${ZIPS[0]}"
 
-          case "$FILE" in
-            *.zip|*.ZIP)
-              if ! unzip -t "$FILE" >/dev/null 2>&1; then
-                echo "recognized=false" >> "$GITHUB_OUTPUT"
-                echo "version=无法识别" >> "$GITHUB_OUTPUT"
-                echo "ZIP 文件无法正常读取。"
-                exit 0
-              fi
+      - name: Extract source code
+        run: |
+          mkdir -p source
+          unzip -q "${{ steps.source.outputs.zip }}" -d source
 
-              unzip -q "$FILE" -d source
-              ;;
-            *)
-              echo "该文件不是 ZIP，无法自动解压并识别完整项目。"
-              echo "recognized=false" >> "$GITHUB_OUTPUT"
-              echo "version=无法识别" >> "$GITHUB_OUTPUT"
-              exit 0
-              ;;
-          esac
-
+      - name: Locate Gradle project
+        id: project
+        shell: bash
+        run: |
           BUILD_FILE=$(find source -type f \
             \( -name build.gradle -o -name build.gradle.kts \) \
             -print -quit)
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "recognized=false" >> "$GITHUB_OUTPUT"
-            echo "version=无法识别" >> "$GITHUB_OUTPUT"
-            echo "没有找到 Gradle 构建文件。"
-            exit 0
+            echo "::error::No Gradle build file found in source ZIP."
+            exit 1
           fi
 
           PROJECT_DIR=$(dirname "$BUILD_FILE")
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Project directory: $PROJECT_DIR"
 
-          if ! grep -R -q -E \
-            'net\.minecraftforge|minecraftforge' \
-            "$PROJECT_DIR" \
-            --include='build.gradle' \
-            --include='build.gradle.kts' \
-            --include='gradle.properties'; then
-            echo "recognized=false" >> "$GITHUB_OUTPUT"
-            echo "version=无法识别" >> "$GITHUB_OUTPUT"
-            echo "没有识别到 Forge 项目标记。"
-            exit 0
-          fi
-
-          echo "recognized=true" >> "$GITHUB_OUTPUT"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Determine version
-        if: steps.prepare.outputs.recognized == 'true'
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
+      - name: Build mod
+        working-directory: ${{ steps.project.outputs.dir }}
         shell: bash
         run: |
-          gh api "repos/$REPO/actions/runs?per_page=100&status=completed" \
-            --jq '[.workflow_runs[] |
-              select(.name == "Auto Build JAR") |
-              .run_number] | max // 0' > previous.txt
-
-          N=$(cat previous.txt)
-          NEXT=$((N + 1))
-
-          if [ "$NEXT" -eq 1 ]; then
-            VERSION="R1"
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon build
           else
-            VERSION="R1.$((NEXT - 1))"
+            gradle --no-daemon build
           fi
 
-          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Build
-        if: steps.prepare.outputs.recognized == 'true'
-        working-directory: ${{ steps.prepare.outputs.project_dir }}
-        shell: bash
-        run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon build -Dorg.gradle.jvmargs=-Xmx3G
-          else
-            gradle --no-daemon build -Dorg.gradle.jvmargs=-Xmx3G
-          fi
-
-      - name: Collect JAR
-        if: steps.prepare.outputs.recognized == 'true'
-        env:
-          VERSION: ${{ steps.version.outputs.name }}
+      - name: Collect JAR files
         shell: bash
         run: |
           mkdir -p output
 
-          find source -type f -path '*/build/libs/*.jar' \
+          find source -type f \
+            -path '*/build/libs/*.jar' \
             ! -name '*-sources.jar' \
             ! -name '*-javadoc.jar' \
             -exec cp {} output/ \;
 
-          JAR=$(find output -maxdepth 1 -name '*.jar' -print -quit)
-
-          if [ -z "$JAR" ]; then
-            echo "编译没有生成 JAR。"
+          if ! find output -maxdepth 1 -type f -name '*.jar' | grep -q .; then
+            echo "::error::Build completed without producing a JAR."
             exit 1
           fi
 
-          mv "$JAR" "output/${VERSION}.jar"
-          echo "成功生成 output/${VERSION}.jar"
+          echo "Generated JAR files:"
+          ls -lh output/
 
-      - name: Save build result
-        if: always()
+      - name: Upload compiled JAR
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.prepare.outputs.recognized == 'true' && steps.version.outputs.name || 'unrecognized' }}
-          path: output/
-          if-no-files-found: warn
+          name: qiyuan-r5-jar
+          path: output/*.jar
+          if-no-files-found: error
           retention-days: 30
