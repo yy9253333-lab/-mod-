@@ -24,15 +24,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Gradle project
+      - name: Debug repository structure
         shell: bash
         run: |
-          echo "当前目录："
+          echo "===== PWD ====="
           pwd
-          echo "仓库文件："
+          echo ""
+          echo "===== Top-level listing ====="
           ls -la
-          echo "查找构建文件："
-          find . -maxdepth 4 \( -name build.gradle -o -name build.gradle.kts \)
+          echo ""
+          echo "===== Full tree (depth 5, excluding .git) ====="
+          find . -maxdepth 5 -not -path '*/.git/*' | sort
+          echo ""
+          echo "===== Search build.gradle / settings.gradle ====="
+          find . -maxdepth 6 \( -name build.gradle -o -name build.gradle.kts -o -name settings.gradle -o -name settings.gradle.kts \) -not -path '*/.git/*'
+          echo ""
+          echo "===== Any .zip / .rar / .7z in repo? ====="
+          find . -maxdepth 6 \( -name '*.zip' -o -name '*.rar' -o -name '*.7z' \) -not -path '*/.git/*'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -42,14 +50,21 @@ jobs:
       - name: Build Forge Mod
         shell: bash
         run: |
-          BUILD_FILE="$(find . -maxdepth 4 -name build.gradle -print -quit)"
+          BUILD_FILE="$(find . -maxdepth 6 -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
             echo "::error::未找到 build.gradle，请检查仓库目录结构。"
             exit 1
           fi
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
+          echo "使用构建目录：$PROJECT_DIR"
           cd "$PROJECT_DIR"
-          gradle --no-daemon build
+          if [ -x ./gradlew ]; then
+            echo "使用 gradlew"
+            ./gradlew --no-daemon build
+          else
+            echo "使用系统 gradle"
+            gradle --no-daemon build
+          fi
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
