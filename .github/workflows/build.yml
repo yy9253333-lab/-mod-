@@ -24,71 +24,56 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Debug repository structure
-        shell: bash
-        run: |
-          echo "===== PWD ====="
-          pwd
-          echo ""
-          echo "===== Top-level listing ====="
-          ls -la
-          echo ""
-          echo "===== Full tree (depth 5, excluding .git) ====="
-          find . -maxdepth 5 -not -path '*/.git/*' | sort
-          echo ""
-          echo "===== Search build.gradle / settings.gradle ====="
-          find . -maxdepth 8 \( -name build.gradle -o -name build.gradle.kts -o -name settings.gradle -o -name settings.gradle.kts \) -not -path '*/.git/*'
-          echo ""
-          echo "===== Any .zip / .rar / .7z in repo? ====="
-          find . -maxdepth 8 \( -name '*.zip' -o -name '*.rar' -o -name '*.7z' \) -not -path '*/.git/*'
-
-      - name: Extract ZIP if present
+      - name: 查找并解压源码
         shell: bash
         run: |
           set -e
           mkdir -p "$GITHUB_WORKSPACE/_extracted"
-          FOUND=0
-          while IFS= read -r ZIP; do
-            [ -z "$ZIP" ] && continue
-            FOUND=1
-            echo "解压：$ZIP"
-            unzip -o -q "$ZIP" -d "$GITHUB_WORKSPACE/_extracted"
-          done < <(find . -maxdepth 8 -name '*.zip' -not -path '*/.git/*')
-          if [ "$FOUND" -eq 0 ]; then
-            echo "仓库中没有 ZIP，跳过解压，直接在仓库目录中查找 Gradle 项目。"
-          else
-            echo "解压完成，目录内容："
-            find "$GITHUB_WORKSPACE/_extracted" -maxdepth 4 | sort
+
+          find "$GITHUB_WORKSPACE" \
+            -type f -iname '*.zip' \
+            ! -path '*/_extracted/*' \
+            -print0 |
+          while IFS= read -r -d '' zipfile; do
+            echo "正在解压：$zipfile"
+            dest="$GITHUB_WORKSPACE/_extracted/$(basename "$zipfile" .zip)"
+            mkdir -p "$dest"
+            unzip -oq "$zipfile" -d "$dest"
+          done
+
+          echo "正在查找 build.gradle..."
+          BUILD_FILE="$(find "$GITHUB_WORKSPACE" \
+            -type f \( -name build.gradle -o -name build.gradle.kts \) \
+            ! -path '*/.gradle/*' \
+            -print -quit)"
+
+          if [ -z "$BUILD_FILE" ]; then
+            echo "仓库文件列表："
+            find "$GITHUB_WORKSPACE" -maxdepth 4 -type f | head -200
+            echo "::error::仍未找到 build.gradle，请检查 ZIP 是否已上传到仓库。"
+            exit 1
           fi
+
+          PROJECT_DIR="$(dirname "$BUILD_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "找到项目：$PROJECT_DIR"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.8'
 
-      - name: Build Forge Mod
+      - name: 编译模组
         shell: bash
         run: |
           set -e
-          echo "在仓库与解压目录中查找 build.gradle..."
-          BUILD_FILE="$(find . "$GITHUB_WORKSPACE/_extracted" -maxdepth 10 -name build.gradle -print -quit 2>/dev/null || true)"
-          if [ -z "$BUILD_FILE" ]; then
-            BUILD_FILE="$(find . "$GITHUB_WORKSPACE/_extracted" -maxdepth 10 -name build.gradle.kts -print -quit 2>/dev/null || true)"
-          fi
-          if [ -z "$BUILD_FILE" ]; then
-            echo "::error::未找到 build.gradle 或 build.gradle.kts，请确认 ZIP 内含完整 Gradle 项目。"
-            exit 1
-          fi
-          PROJECT_DIR="$(dirname "$BUILD_FILE")"
-          echo "使用构建目录：$PROJECT_DIR"
           cd "$PROJECT_DIR"
           ls -la
-          if [ -x ./gradlew ]; then
-            echo "使用项目自带 gradlew"
+
+          if [ -f ./gradlew ]; then
             chmod +x ./gradlew
             ./gradlew --no-daemon build
           else
-            echo "使用系统 gradle"
             gradle --no-daemon build
           fi
 
