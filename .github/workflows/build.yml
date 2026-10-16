@@ -1,4 +1,4 @@
-name: Qiyuan Mod Build
+name: Qiyuan Auto Build
 
 on:
   workflow_dispatch:
@@ -37,10 +37,29 @@ jobs:
           find . -maxdepth 5 -not -path '*/.git/*' | sort
           echo ""
           echo "===== Search build.gradle / settings.gradle ====="
-          find . -maxdepth 6 \( -name build.gradle -o -name build.gradle.kts -o -name settings.gradle -o -name settings.gradle.kts \) -not -path '*/.git/*'
+          find . -maxdepth 8 \( -name build.gradle -o -name build.gradle.kts -o -name settings.gradle -o -name settings.gradle.kts \) -not -path '*/.git/*'
           echo ""
           echo "===== Any .zip / .rar / .7z in repo? ====="
-          find . -maxdepth 6 \( -name '*.zip' -o -name '*.rar' -o -name '*.7z' \) -not -path '*/.git/*'
+          find . -maxdepth 8 \( -name '*.zip' -o -name '*.rar' -o -name '*.7z' \) -not -path '*/.git/*'
+
+      - name: Extract ZIP if present
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/_extracted"
+          FOUND=0
+          while IFS= read -r ZIP; do
+            [ -z "$ZIP" ] && continue
+            FOUND=1
+            echo "解压：$ZIP"
+            unzip -o -q "$ZIP" -d "$GITHUB_WORKSPACE/_extracted"
+          done < <(find . -maxdepth 8 -name '*.zip' -not -path '*/.git/*')
+          if [ "$FOUND" -eq 0 ]; then
+            echo "仓库中没有 ZIP，跳过解压，直接在仓库目录中查找 Gradle 项目。"
+          else
+            echo "解压完成，目录内容："
+            find "$GITHUB_WORKSPACE/_extracted" -maxdepth 4 | sort
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -50,16 +69,23 @@ jobs:
       - name: Build Forge Mod
         shell: bash
         run: |
-          BUILD_FILE="$(find . -maxdepth 6 -name build.gradle -print -quit)"
+          set -e
+          echo "在仓库与解压目录中查找 build.gradle..."
+          BUILD_FILE="$(find . "$GITHUB_WORKSPACE/_extracted" -maxdepth 10 -name build.gradle -print -quit 2>/dev/null || true)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "::error::未找到 build.gradle，请检查仓库目录结构。"
+            BUILD_FILE="$(find . "$GITHUB_WORKSPACE/_extracted" -maxdepth 10 -name build.gradle.kts -print -quit 2>/dev/null || true)"
+          fi
+          if [ -z "$BUILD_FILE" ]; then
+            echo "::error::未找到 build.gradle 或 build.gradle.kts，请确认 ZIP 内含完整 Gradle 项目。"
             exit 1
           fi
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "使用构建目录：$PROJECT_DIR"
           cd "$PROJECT_DIR"
+          ls -la
           if [ -x ./gradlew ]; then
-            echo "使用 gradlew"
+            echo "使用项目自带 gradlew"
+            chmod +x ./gradlew
             ./gradlew --no-daemon build
           else
             echo "使用系统 gradle"
@@ -70,6 +96,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Qiyuan-Forge-1.20.1
-          path: "**/build/libs/*.jar"
+          path: |
+            **/build/libs/*.jar
+            !**/build/libs/*-sources.jar
+            !**/build/libs/*-javadoc.jar
           if-no-files-found: error
           retention-days: 14
