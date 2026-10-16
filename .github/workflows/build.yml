@@ -9,10 +9,11 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: auto-build-jar
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -31,8 +32,6 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
 
       - name: Prepare workspace
         id: prepare
@@ -106,7 +105,7 @@ jobs:
           REPO: ${{ github.repository }}
         shell: bash
         run: |
-          gh api "repos/$REPO/actions/runs?per_page=100" \
+          gh api "repos/$REPO/actions/runs?per_page=100&status=completed" \
             --jq '[.workflow_runs[] |
               select(.name == "Auto Build JAR") |
               .run_number] | max // 0' > previous.txt
@@ -129,9 +128,9 @@ jobs:
         run: |
           if [ -f gradlew ]; then
             chmod +x gradlew
-            ./gradlew --no-daemon build
+            ./gradlew --no-daemon build -Dorg.gradle.jvmargs=-Xmx3G
           else
-            gradle --no-daemon build
+            gradle --no-daemon build -Dorg.gradle.jvmargs=-Xmx3G
           fi
 
       - name: Collect JAR
@@ -161,7 +160,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.prepare.outputs.recognized == 'true' && steps.version.outputs.name || '无法识别' }}
+          name: ${{ steps.prepare.outputs.recognized == 'true' && steps.version.outputs.name || 'unrecognized' }}
           path: output/
           if-no-files-found: warn
           retention-days: 30
