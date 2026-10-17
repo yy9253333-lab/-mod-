@@ -24,39 +24,54 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 查找并解压源码
+      - name: 查找修复版源码 ZIP
         shell: bash
         run: |
-          set -e
-          mkdir -p "$GITHUB_WORKSPACE/_extracted"
+          set -euo pipefail
 
-          find "$GITHUB_WORKSPACE" \
-            -type f -iname '*.zip' \
+          SOURCE_ZIP="$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            -iname 'qiyuan-r6-A-anchored-array-source-fixed.zip' \
             ! -path '*/_extracted/*' \
-            -print0 |
-          while IFS= read -r -d '' zipfile; do
-            echo "正在解压：$zipfile"
-            dest="$GITHUB_WORKSPACE/_extracted/$(basename "$zipfile" .zip)"
-            mkdir -p "$dest"
-            unzip -oq "$zipfile" -d "$dest"
-          done
+            -print -quit)"
 
-          echo "正在查找 build.gradle..."
-          BUILD_FILE="$(find "$GITHUB_WORKSPACE" \
-            -type f \( -name build.gradle -o -name build.gradle.kts \) \
-            ! -path '*/.gradle/*' \
+          if [ -z "$SOURCE_ZIP" ]; then
+            echo "::error::没有找到修复版 ZIP，请确认文件已上传到仓库。"
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 3 -type f -iname '*.zip'
+            exit 1
+          fi
+
+          echo "选中的源码包：$SOURCE_ZIP"
+
+          DEST="$GITHUB_WORKSPACE/_extracted/fixed-source"
+          mkdir -p "$DEST"
+          unzip -oq "$SOURCE_ZIP" -d "$DEST"
+
+          BUILD_FILE="$(find "$DEST" \
+            -type f \
+            \( -name build.gradle -o -name build.gradle.kts \) \
             -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "仓库文件列表："
-            find "$GITHUB_WORKSPACE" -maxdepth 4 -type f | head -200
-            echo "::error::仍未找到 build.gradle，请检查 ZIP 是否已上传到仓库。"
+            echo "::error::修复版 ZIP 内没有找到 Gradle 构建文件。"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "找到项目：$PROJECT_DIR"
+
+          echo "最终编译目录：$PROJECT_DIR"
+
+          echo "检查修复内容："
+          grep -n 'getPlayers(p -> true)' \
+            "$PROJECT_DIR/src/main/java/cn/blockforge/generated/modb22b5730/block/entity/InscribedRuneBlockEntity.java"
+
+          grep -n 'ENCHANTMENT_TABLE_USE' \
+            "$PROJECT_DIR/src/main/java/cn/blockforge/generated/modb22b5730/block/ResonanceTableBlock.java"
+
+          grep -n 'serverLevel.sendParticles' \
+            "$PROJECT_DIR/src/main/java/cn/blockforge/generated/modb22b5730/block/ResonanceTableBlock.java"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
